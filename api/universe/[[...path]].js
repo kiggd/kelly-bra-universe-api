@@ -38,6 +38,77 @@ const OTP_MAX_ATTEMPTS = 5;
 const REFERRAL_24H_LIMIT = 5;
 const LINE_CHANNEL_ID = process.env.LINE_CHANNEL_ID || '1608559038';
 
+// 一次性建表端點密鑰（上線後可移除）
+const MIGRATE_KEY = 'kl-bra-universe-migrate-20260901';
+
+const SCHEMA_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS members (
+     member_id    TEXT PRIMARY KEY,
+     line_uid     TEXT,
+     email        TEXT,
+     referral_id  TEXT,
+     ref_from     TEXT,
+     role_id      TEXT,
+     fit_result   TEXT,
+     fit_scores   TEXT DEFAULT '{}',
+     collection   TEXT DEFAULT '[]',
+     squad        TEXT DEFAULT '{}',
+     streak       INTEGER DEFAULT 0,
+     last_checkin TEXT,
+     tickets      INTEGER DEFAULT 0,
+     keys         INTEGER DEFAULT 0,
+     friends      INTEGER DEFAULT 0,
+     boss_hp      INTEGER DEFAULT 100,
+     tags         TEXT DEFAULT '[]',
+     chest_opened INTEGER DEFAULT 0,
+     updated_at   TEXT
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_members_line_uid ON members(line_uid)`,
+  `CREATE INDEX IF NOT EXISTS idx_members_email ON members(email)`,
+  `CREATE INDEX IF NOT EXISTS idx_members_ref_from ON members(ref_from)`,
+  `CREATE TABLE IF NOT EXISTS otp_codes (
+     email        TEXT PRIMARY KEY,
+     code_hash    TEXT,
+     expires_at   BIGINT,
+     attempts     INTEGER DEFAULT 0,
+     last_sent_at BIGINT
+   )`,
+  `CREATE TABLE IF NOT EXISTS ledgers (
+     id              TEXT PRIMARY KEY,
+     member_id       TEXT NOT NULL,
+     trigger         TEXT NOT NULL,
+     granted         TEXT NOT NULL,
+     idempotency_key TEXT,
+     created_at      TEXT NOT NULL
+   )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_ledgers_member_trigger ON ledgers(member_id, trigger)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_ledgers_idem ON ledgers(idempotency_key)`,
+  `CREATE TABLE IF NOT EXISTS events (
+     id         TEXT PRIMARY KEY,
+     member_id  TEXT,
+     event      TEXT NOT NULL,
+     ts         TEXT,
+     payload    TEXT NOT NULL,
+     created_at TEXT NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_events_member ON events(member_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_events_name ON events(event)`,
+  `CREATE TABLE IF NOT EXISTS referrals (
+     id          TEXT PRIMARY KEY,
+     ref_code    TEXT NOT NULL,
+     referrer_id TEXT,
+     friend_id   TEXT NOT NULL,
+     status      TEXT DEFAULT 'pending',
+     created_at  TEXT NOT NULL,
+     updated_at  TEXT NOT NULL
+   )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_referrals_pair ON referrals(ref_code, friend_id)`,
+  `CREATE TABLE IF NOT EXISTS settings (
+     key   TEXT PRIMARY KEY,
+     value TEXT NOT NULL
+   )`,
+];
+
 let jwtSecretCache = null;
 
 export default async function handler(req, res) {
@@ -57,6 +128,7 @@ export default async function handler(req, res) {
     if (path === '/events') return send(res, 200, await handleEvent(req), cors);
     if (path === '/rewards/claim') return send(res, 200, await handleClaim(req), cors);
     if (path === '/crm/sync') return send(res, 200, await handleCrmSync(req), cors);
+    if (path === '/__migrate') return send(res, 200, await handleMigrate(req), cors);
     return send(res, 404, { error: 'not_found', message: '找不到端點' }, cors);
   } catch (e) {
     console.error('unhandled', e);
@@ -529,4 +601,17 @@ function httpError(status, code, message) {
   e.status = status;
   e.code = code;
   return e;
+}
+
+/* ───────────── 一次性建表（部署後呼叫一次） ───────────── */
+
+async function handleMigrate(req) {
+  const url = new URL(req.url, 'http://localhost');
+  if (url.searchParams.get('key') !== MIGRATE_KEY) {
+    throw httpError(403, 'forbidden', 'migration key required');
+  }
+  for (const stmt of SCHEMA_STATEMENTS) {
+    await sql.unsafe(stmt);
+  }
+  return { ok: true, applied: SCHEMA_STATEMENTS.length };
 }
