@@ -1,0 +1,5 @@
+{
+  "rewrites": [
+    { "source": "/api/universe/:path*", "destination": "/api/handler" }
+  ]
+}
